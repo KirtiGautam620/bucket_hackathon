@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WhatsApp Bot Tester</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px; background: #f0f2f5; }
+        .container { display: flex; gap: 20px; }
+        .panel { flex: 1; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        h2 { margin-top: 0; border-bottom: 2px solid #eee; padding-bottom: 10px; }
+        
+        /* Chat Styles */
+        #chat-history { height: 400px; overflow-y: auto; border: 1px solid #ddd; padding: 10px; margin-bottom: 10px; background: #e5ddd5; border-radius: 4px; }
+        .message { margin-bottom: 8px; padding: 8px 12px; border-radius: 8px; max-width: 80%; clear: both; }
+        .message.user { background: #dcf8c6; float: right; }
+        .message.bot { background: white; float: left; }
+        .input-group { display: flex; gap: 10px; }
+        input[type="text"] { flex: 1; padding: 8px; border: 1px solid #ddd; border-radius: 4px; }
+        button { padding: 8px 16px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover { background: #0056b3; }
+
+        /* Leads Styles */
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        th, td { text-align: left; padding: 12px; border-bottom: 1px solid #ddd; }
+        th { background: #f8f9fa; }
+        .tag { display: inline-block; background: #e1f5fe; padding: 2px 8px; border-radius: 12px; font-size: 12px; color: #0288d1; margin: 2px; }
+    </style>
+</head>
+<body>
+    <h1>WhatsApp Bot Simulator & Lead Inspector</h1>
+    
+    <div class="container">
+        <!-- Chat Simulator -->
+        <div class="panel">
+            <h2>📱 Chat Simulator</h2>
+            <div style="margin-bottom: 15px;">
+                <label>Phone Number:</label>
+                <input type="text" id="phone" value="919999999999" style="width: 150px;">
+            </div>
+            <div id="chat-history"></div>
+            <div class="input-group">
+                <input type="text" id="message-input" placeholder="Type a message..." onkeypress="if(event.key === 'Enter') sendMessage()">
+                <button onclick="sendMessage()">Send</button>
+            </div>
+        </div>
+
+        <!-- Leads Inspector -->
+        <div class="panel">
+            <h2>👥 Lead Inspector <button onclick="fetchLeads()" style="float: right; font-size: 12px;">Refresh</button></h2>
+            <div id="leads-list">
+                Loading leads...
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Chat Logic
+        async function sendMessage() {
+            const phone = document.getElementById('phone').value;
+            const text = document.getElementById('message-input').value;
+            if (!text) return;
+
+            // Add user message to UI
+            appendMessage(text, 'user');
+            document.getElementById('message-input').value = '';
+
+            try {
+                // Send to webhook
+                const response = await fetch('/api/whatsapp/webhook', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        From: `whatsapp:${phone}`,
+                        Body: text,
+                        MediaUrl0: '',
+                        MediaContentType0: ''
+                    })
+                });
+
+                if (response.ok) {
+                    // In a real webhook, the response is async via Twilio.
+                    // Here we trigger a refresh of the leads to see the history/interests
+                    // But we won't get the reply directly in the HTTP response usually.
+                    // However, our backend implementation sends the Twilio message via API.
+                    // To see the REPLY, we would need to inspect the updated lead history or mock the Twilio client properly.
+                    
+                    // For this simple UI, let's fetch the lead details to get the last message.
+                    setTimeout(async () => {
+                        await fetchLeads(); // Refresh table
+                        const lead = await getLeadByPhone(phone);
+                        if (lead && lead.interactionHistory && lead.interactionHistory.length > 0) {
+                            const lastMsg = lead.interactionHistory[lead.interactionHistory.length - 1];
+                            if (lastMsg.role === 'assistant') {
+                                appendMessage(lastMsg.content, 'bot');
+                            }
+                        }
+                    }, 5000); // Wait for OpenAI
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                appendMessage('Error sending message', 'bot');
+            }
+        }
+
+        function appendMessage(text, sender) {
+            const div = document.createElement('div');
+            div.className = `message ${sender}`;
+            div.textContent = text;
+            const container = document.getElementById('chat-history');
+            container.appendChild(div);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        // Leads Logic
+        async function fetchLeads() {
+            try {
+                const response = await fetch('/api/leads');
+                const leads = await response.json();
+                renderLeads(leads);
+            } catch (error) {
+                document.getElementById('leads-list').innerHTML = 'Error fetching leads';
+            }
+        }
+
+        async function getLeadByPhone(phone) {
+            const response = await fetch('/api/leads');
+            const leads = await response.json();
+            return leads.find(l => l.phone.includes(phone));
+        }
+
+        function renderLeads(leads) {
+            if (leads.length === 0) {
+                document.getElementById('leads-list').innerHTML = '<p>No leads found.</p>';
+                return;
+            }
+
+            let html = `
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Phone</th>
+                            <th>Interests</th>
+                            <th>Recommendations</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            `;
+
+            leads.forEach(lead => {
+                const interests = lead.interests ? lead.interests.map(i => `<span class="tag">${i}</span>`).join('') : '-';
+                // Note: Schemes are not stored on lead, they are just sent in chat.
+                // We'd need to parse history to see them, or just rely on the Chat Simulator.
+                html += `
+                    <tr>
+                        <td>${lead.phone || 'N/A'}</td>
+                        <td>${interests}</td>
+                         <td><button onclick="viewHistory('${lead._id}')">View</button></td>
+                    </tr>
+                `;
+            });
+
+            html += '</tbody></table>';
+            document.getElementById('leads-list').innerHTML = html;
+        }
+
+        async function viewHistory(id) {
+             const response = await fetch(`/api/leads/${id}`);
+             const lead = await response.json();
+             console.log(lead.interactionHistory);
+             alert(JSON.stringify(lead.interactionHistory, null, 2));
+        }
+
+        // Init
+        fetchLeads();
+    </script>
+</body>
+</html>
